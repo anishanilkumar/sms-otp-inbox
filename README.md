@@ -42,7 +42,7 @@ SMS_DB=./sms.db python3 app.py      # listens on 127.0.0.1:8776
 |---|---|---|
 | `SMS_HMAC_SECRET` | required | Shared with the phone app. The server refuses to start without it |
 | `SMS_HEARTBEAT_TOKEN` | required, 16+ chars | Last part of the heartbeat URL |
-| `SMS_HEARTBEAT_MINUTES` | `5` | Must match the app's heartbeat interval. The page shows the phone as late after 2 missed pings and silent after 6 |
+| `SMS_HEARTBEAT_MINUTES` | `5` | Must match the app's heartbeat interval. The page shows the phone as late after 2 missed pings and not reporting after 6 |
 | `SMS_DB` | `/var/lib/sms-inbox/sms.db` | |
 | `SMS_PORT` | `8776` | |
 | `SMS_KEEP_DAYS` | `7` | |
