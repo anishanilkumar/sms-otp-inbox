@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import re
 import sqlite3
 import sys
@@ -35,6 +36,10 @@ PORT = int(os.environ.get("SMS_PORT", "8776"))
 KEEP_DAYS = int(os.environ.get("SMS_KEEP_DAYS", "7"))
 MAX_BODY = 64 * 1024
 PAGE = (Path(__file__).parent / "index.html").read_bytes()
+# Public demo: no secrets, no database, nothing accepted from visitors. The inbox is
+# made up from the clock (demo_payload), so every visitor sees the same live-looking
+# page and there is no state to reset.
+DEMO = os.environ.get("SMS_DEMO") == "1"
 
 # A code is only taken from a message that says it is one. Without a keyword, a bare
 # number is as likely an amount, a balance or an account suffix, and showing that as
@@ -94,6 +99,48 @@ def init_db():
         conn.execute("CREATE TABLE IF NOT EXISTS phone (key TEXT PRIMARY KEY, value TEXT)")
 
 
+DEMO_SLOT_MS = 150_000  # a made-up SMS may arrive every 2.5 minutes
+DEMO_MESSAGES = [
+    ("AX-HDFCBK", "{code} is your OTP for txn of INR {amount}.00 at AMAZON on HDFC Bank card XX{card}. Valid for 10 mins. Do not share it with anyone."),
+    ("VM-ICICIB", "Dear Customer, {code} is the OTP to log in to iMobile Pay. Never share it with anyone. -ICICI Bank"),
+    ("Google", "G-{code} is your Google verification code."),
+    ("JM-SWIGGY", "{code} is your Swiggy login OTP. Do not share it with anyone."),
+    ("N26", "Your N26 verification code: {code}. Never share this code, not even with N26 staff."),
+    ("VK-DIGILK", "{code} is the OTP to sign in to DigiLocker. Valid for 10 minutes."),
+    ("AD-IRCTCi", "OTP for IRCTC registration is {code}. Do not share it with anyone."),
+    # Passes the phone's keyword filter but has no code: shows that a bare number
+    # (a card suffix here) is not presented as one.
+    ("JD-AIRTEL", "Your Airtel Payments Bank PIN for card XX{card} was changed successfully. Not you? Call 400."),
+]
+
+
+def demo_payload(now):
+    """Made-up inbox for the public demo, a pure function of the clock."""
+    messages = []
+    newest = now - now % DEMO_SLOT_MS
+    for i in range(40):
+        slot = newest - i * DEMO_SLOT_MS
+        rng = random.Random(slot)
+        if i and rng.random() < 0.55:  # irregular gaps; the newest slot always has one
+            continue
+        sender, template = rng.choice(DEMO_MESSAGES)
+        text = template.format(code=rng.randint(100000, 999999), amount=rng.randint(149, 24999),
+                               card=rng.randint(1000, 9999))
+        received = slot + rng.randint(0, 20_000)
+        if received > now:
+            received = now
+        messages.append({"id": slot, "sender": sender, "body": text, "otp": extract_otp(text),
+                         "sim": "1", "sent_ms": received - 2000, "received_ms": received})
+    phone = {
+        # Heartbeats every 5 minutes, the last one at most a few minutes ago.
+        "heartbeat_ms": now - now % 300_000,
+        "sms_ms": messages[0]["received_ms"],
+        "battery": str(62 + (now // 3_600_000) % 30), "power": "unplugged", "network": "wifi",
+        "heartbeat_interval_ms": 300_000,
+    }
+    return {"now_ms": now, "demo": True, "phone": phone, "messages": messages}
+
+
 def remember(conn, **values):
     conn.executemany(
         "INSERT INTO phone (key, value) VALUES (?, ?) "
@@ -127,6 +174,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             return self.send(200, PAGE, "text/html; charset=utf-8")
+        if self.path == "/api/messages" and DEMO:
+            return self.send(200, json.dumps(demo_payload(int(time.time() * 1000))).encode())
         if self.path == "/api/messages":
             with db() as conn:
                 rows = conn.execute(
@@ -141,6 +190,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404, b'{"error":"not found"}')
 
     def do_POST(self):
+        if DEMO:
+            return self.send(403, b'{"error":"this is a demo; nothing is accepted"}')
         if self.path.startswith("/heartbeat/"):
             return self.heartbeat()
         if self.path != "/hook":
@@ -185,6 +236,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    if DEMO:
+        ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+        return
     if not SECRET:
         # An empty key would make every forged request verify.
         sys.exit("SMS_HMAC_SECRET is empty; refusing to start")

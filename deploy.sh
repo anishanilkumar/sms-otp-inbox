@@ -27,5 +27,7 @@ ssh "$target" "mkdir -p '$DEPLOY_APP_DIR'"
 rsync -az app.py index.html "$target:$DEPLOY_APP_DIR/"
 
 echo "==> Restarting"
-ssh "$target" 'sudo systemctl restart sms-inbox && systemctl is-active sms-inbox'
+# The demo is restarted only where the server already declares it.
+ssh "$target" 'sudo systemctl restart sms-inbox && systemctl is-active sms-inbox
+  if systemctl cat sms-inbox-demo >/dev/null 2>&1; then sudo systemctl restart sms-inbox-demo && systemctl is-active sms-inbox-demo; fi'
 echo "Deployed."

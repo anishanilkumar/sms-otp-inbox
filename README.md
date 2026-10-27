@@ -7,6 +7,9 @@ which POSTs each OTP SMS here. A page behind a login shows the latest code in
 large type (tap to copy), refreshing every few seconds, plus whether the phone
 is still alive.
 
+**Demo:** https://otp-demo.anishsheela.com. It shows made-up messages, with a
+new code every few minutes, and accepts nothing.
+
 - **`app.py`**: Python standard library only, SQLite storage. Messages are
   deleted after 7 days.
 - **`index.html`**: the page, styled like my other personal apps.
@@ -43,6 +46,7 @@ SMS_DB=./sms.db python3 app.py      # listens on 127.0.0.1:8776
 | `SMS_DB` | `/var/lib/sms-inbox/sms.db` | |
 | `SMS_PORT` | `8776` | |
 | `SMS_KEEP_DAYS` | `7` | |
+| `SMS_DEMO` | unset | `1` runs the public demo: no secrets and no database are needed, `/api/messages` returns a made-up inbox generated from the clock, and every POST is refused |
 
 Tests: `python3 -m unittest test_app`. Deploy: copy `.deploy.env.example` to
 `.deploy.env`, fill it in, and run `./deploy.sh` (rsync plus a systemd restart;

@@ -59,6 +59,11 @@ header { display: flex; justify-content: space-between; align-items: baseline; m
 .instrument::before { top: 0; left: 0; border-right: none; border-bottom: none; }
 .instrument::after { bottom: 0; right: 0; border-left: none; border-top: none; }
 
+/* Public demo only (the API says so): gold, the colour for "not the real thing". */
+#demo { background: var(--panel); border-left: 4px solid var(--gold); padding: 0.75rem var(--pad); margin-bottom: var(--gap); }
+#demo .label { color: var(--gold); margin-right: 0.5rem; }
+#demo a { color: var(--arc); }
+
 /* The phone: is it still forwarding? A callout with the state in its left border and dot. */
 #phone {
   display: flex; justify-content: space-between; align-items: center; gap: var(--gap); flex-wrap: wrap;
@@ -106,6 +111,9 @@ li.old { opacity: 0.6; }
     <span class="wordmark">OTP</span>
     <span class="stamp status" id="status">Connecting</span>
   </header>
+
+  <p id="demo" hidden><span class="label">Demo</span>Made-up messages: a new code arrives every few minutes and nothing you do here is stored.
+    <a href="https://github.com/anishanilkumar/sms-otp-inbox">Source and setup</a></p>
 
   <section id="phone" data-state="unknown" aria-live="polite">
     <span><span class="dot"></span><span class="state" id="phone-state">Phone</span></span>
@@ -166,6 +174,7 @@ function render() {
   // Ages are measured on the server's clock plus the time since we heard from it,
   // so a phone with a wrong clock still shows honest ages.
   const now = data.now_ms + (Date.now() - lastOk);
+  document.getElementById("demo").hidden = !data.demo;
   renderPhone(now);
   const latest = data.messages.find(m => m.otp);
   const box = document.getElementById("latest");

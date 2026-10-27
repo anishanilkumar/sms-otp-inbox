@@ -97,5 +97,23 @@ class Hook(unittest.TestCase):
         self.assertEqual(self.post('{"from":"x","text":"OTP 999999"}', secret="wrong"), 401)
 
 
+class Demo(unittest.TestCase):
+    def test_inbox_is_stable_and_fresh(self):
+        now = 1793000000123
+        a, b = app.demo_payload(now), app.demo_payload(now)
+        self.assertEqual(a, b)  # every visitor sees the same page
+        msgs = a["messages"]
+        self.assertGreater(len(msgs), 5)
+        self.assertLess(now - msgs[0]["received_ms"], app.DEMO_SLOT_MS)
+        self.assertTrue(all(m["received_ms"] <= now for m in msgs))
+        self.assertLessEqual(now - a["phone"]["heartbeat_ms"], 300_000)
+
+    def test_templates_extract_as_intended(self):
+        for sender, template in app.DEMO_MESSAGES:
+            text = template.format(code=482913, amount=2500, card=1234)
+            expected = None if sender == "JD-AIRTEL" else "482913"
+            self.assertEqual(app.extract_otp(text), expected, sender)
+
+
 if __name__ == "__main__":
     unittest.main()
