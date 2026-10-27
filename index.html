@@ -64,7 +64,7 @@ header { display: flex; justify-content: space-between; align-items: baseline; m
 /* Public demo only (the API says so): gold, the colour for "not the real thing". */
 #demo { background: var(--panel); border-left: 4px solid var(--gold); padding: 0.75rem var(--pad); margin-bottom: var(--gap); }
 #demo .label { color: var(--gold); margin-right: 0.5rem; }
-#demo a { color: var(--arc); }
+#demo a, .status a { color: var(--arc); }
 
 /* The phone: is it still forwarding? A callout with the state in its left border and dot. */
 #phone {
@@ -74,6 +74,8 @@ header { display: flex; justify-content: space-between; align-items: baseline; m
 }
 #phone .dot { display: inline-block; width: 0.625rem; height: 0.625rem; border-radius: 50%; background: var(--state, var(--unknown)); margin-right: 0.625rem; }
 #phone .state { font: 500 var(--t-label) var(--face-mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--state, var(--unknown)); }
+/* The advice for a lost phone goes on its own line, after the facts. */
+#phone-detail { white-space: pre-line; }
 #phone[data-state="ok"] { --state: var(--ok); }
 #phone[data-state="late"] { --state: var(--late); }
 #phone[data-state="down"] { --state: var(--down); }
@@ -89,6 +91,8 @@ header { display: flex; justify-content: space-between; align-items: baseline; m
 #latest.stale { opacity: 0.34; }
 #latest.empty .code { color: var(--slate); font-size: var(--t-readout); }
 #latest .meta { display: flex; justify-content: space-between; gap: var(--gap); }
+#latest .meta .label { white-space: nowrap; }
+#latest .meta .stamp { text-align: right; }
 .copied { color: var(--gold) !important; }
 
 h2 { margin: calc(var(--gap) * 2) 0 0.5rem; }
@@ -111,7 +115,7 @@ li.old { opacity: 0.6; }
 <main>
   <header>
     <span class="wordmark">OTP</span>
-    <span class="stamp status" id="status">Connecting</span>
+    <span class="stamp status" id="status">Connecting to server</span>
   </header>
 
   <p id="demo" hidden><span class="label">Demo</span>Made-up messages: a new code arrives every few minutes and nothing you do here is stored.
@@ -119,12 +123,12 @@ li.old { opacity: 0.6; }
 
   <section id="phone" data-state="unknown" aria-live="polite">
     <span><span class="dot"></span><span class="state" id="phone-state">Phone</span></span>
-    <span class="stamp" id="phone-detail">No heartbeat yet</span>
+    <span class="stamp" id="phone-detail">First check-in due within 5 min</span>
   </section>
 
   <button class="instrument" id="latest" type="button">
     <div class="meta"><span class="label">Latest code</span><span class="stamp" id="latest-age"></span></div>
-    <div class="code" id="latest-code">Nothing yet</div>
+    <div class="code" id="latest-code">No codes yet</div>
     <div class="meta"><span id="latest-from"></span><span class="stamp" id="latest-hint"></span></div>
   </button>
 
@@ -134,7 +138,11 @@ li.old { opacity: 0.6; }
 
 <script>
 const FRESH_MS = 10 * 60 * 1000;
+const NETWORK = { wifi: "Wi-Fi", mobile: "Mobile data", ethernet: "Ethernet", none: "No network" };
 let lastOk = 0, data = null;
+// Which code was just copied, and until when to say so. Kept outside the DOM
+// because the page re-renders every poll, which would wipe a flash set on an element.
+let copied = { code: null, until: 0 };
 
 function ago(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -144,12 +152,15 @@ function ago(ms) {
   return Math.round(s / 86400) + " d ago";
 }
 
-function copy(code, el) {
+function copy(code) {
   navigator.clipboard?.writeText(code).then(() => {
-    el.classList.add("copied");
-    setTimeout(() => el.classList.remove("copied"), 1200);
+    copied = { code, until: Date.now() + 1500 };
+    render();
+    setTimeout(render, 1600);
   });
 }
+
+const justCopied = code => copied.code === code && Date.now() < copied.until;
 
 function renderPhone(now) {
   const p = data.phone || {};
@@ -161,14 +172,23 @@ function renderPhone(now) {
   const state = !seen ? "unknown" : age <= 2 * every + 60000 ? "ok" : age <= 6 * every ? "late" : "down";
   const box = document.getElementById("phone");
   box.dataset.state = state;
-  document.getElementById("phone-state").textContent =
-    { ok: "Phone online", late: "Phone late", down: "Phone not reporting", unknown: "Phone" }[state];
+  document.getElementById("phone-state").textContent = {
+    ok: "Phone online", late: "Phone check-in late",
+    down: "Lost contact with phone", unknown: "Waiting for phone",
+  }[state];
+  const mins = Math.round(every / 60000);
   const bits = [];
-  if (seen) bits.push("Seen " + ago(age));
-  if (hb && sms > hb) bits.push("last SMS " + ago(now - sms));
-  if (p.battery && p.battery !== "-1") bits.push("Battery " + p.battery + "%" + (p.power && p.power !== "unplugged" && p.power !== "unknown" ? " charging" : ""));
-  if (p.network && p.network !== "other") bits.push(p.network);
-  document.getElementById("phone-detail").textContent = bits.length ? bits.join(" · ") : "No heartbeat yet";
+  if (!seen) bits.push("First check-in due within " + mins + " min");
+  else if (state === "late") bits.push("Last check-in " + ago(age) + ", expected every " + mins + " min");
+  else bits.push("Last check-in " + ago(age));
+  // Battery and network only arrive with an SMS, so they can be far older than the
+  // last check-in. Say how old when they are, rather than let them pass as current.
+  const health = [];
+  if (p.battery && p.battery !== "-1") health.push("Battery " + p.battery + "%" + (p.power && p.power !== "unplugged" && p.power !== "unknown" ? " charging" : ""));
+  if (NETWORK[p.network]) health.push(NETWORK[p.network]);
+  if (health.length) bits.push(health.join(", ") + (sms && now - sms > 2 * every ? " (" + ago(now - sms) + ")" : ""));
+  document.getElementById("phone-detail").textContent = bits.join(" · ") +
+    (state === "down" ? "\nCheck the phone: battery, signal, or the app was closed" : "");
 }
 
 function render() {
@@ -182,10 +202,14 @@ function render() {
   const box = document.getElementById("latest");
   box.classList.toggle("empty", !latest);
   box.classList.toggle("stale", !!latest && now - latest.received_ms > FRESH_MS);
-  document.getElementById("latest-code").textContent = latest ? latest.otp : "Nothing yet";
-  document.getElementById("latest-age").textContent = latest ? ago(now - latest.received_ms) : "";
+  const latestAge = latest ? now - latest.received_ms : 0;
+  document.getElementById("latest-code").textContent = latest ? latest.otp : "No codes yet";
+  document.getElementById("latest-age").textContent =
+    latest ? ago(latestAge) + (latestAge > FRESH_MS ? " · probably expired" : "") : "";
   document.getElementById("latest-from").textContent = latest ? latest.sender : "";
-  document.getElementById("latest-hint").textContent = latest ? "Tap to copy" : "";
+  const hint = document.getElementById("latest-hint");
+  hint.textContent = !latest ? "" : justCopied(latest.otp) ? "Copied" : "Tap to copy";
+  hint.classList.toggle("copied", !!latest && justCopied(latest.otp));
 
   const list = document.getElementById("list");
   list.replaceChildren(...data.messages.map(m => {
@@ -198,8 +222,9 @@ function render() {
     li.append(row);
     if (m.otp) {
       const b = document.createElement("button"); b.className = "otp"; b.type = "button";
-      b.textContent = m.otp; b.title = "Copy";
-      b.onclick = () => copy(m.otp, b);
+      b.textContent = justCopied(m.otp) ? "Copied" : m.otp; b.title = "Copy";
+      b.classList.toggle("copied", justCopied(m.otp));
+      b.onclick = () => copy(m.otp);
       li.append(b);
     }
     const text = document.createElement("div"); text.className = "text"; text.textContent = m.body;
@@ -214,24 +239,31 @@ function render() {
 
 async function poll() {
   const status = document.getElementById("status");
+  // This is the browser's link to the server, not the phone's: worded so it can't be
+  // read as the phone strip below.
+  let r = null;
   try {
-    // redirect: "error" — an expired login answers with a redirect to Kanidm, which
-    // fetch cannot follow cross-origin; treat it like being offline and say so.
-    const r = await fetch("/api/messages", { cache: "no-store", redirect: "error" });
-    if (!r.ok) throw new Error(r.status);
+    // redirect: "manual": an expired login answers with a redirect to Kanidm. Caught
+    // here as an opaque redirect, it can be told apart from the network being down.
+    r = await fetch("/api/messages", { cache: "no-store", redirect: "manual" });
+  } catch (e) { /* network down; r stays null */ }
+  if (r && r.type === "opaqueredirect") {
+    document.documentElement.dataset.connection = "offline";
+    status.replaceChildren("Signed out · ", Object.assign(document.createElement("a"), { href: "/", textContent: "Sign in" }));
+  } else if (r && r.ok) {
     data = await r.json(); lastOk = Date.now();
     document.documentElement.dataset.connection = "online";
-    status.textContent = "Live";
-  } catch (e) {
+    status.textContent = "Up to date";
+  } else {
     document.documentElement.dataset.connection = "offline";
-    status.textContent = lastOk ? "Offline · checked " + ago(Date.now() - lastOk) : "Offline · reload to sign in";
+    status.textContent = "Can't reach server" + (lastOk ? " · last update " + ago(Date.now() - lastOk) : "");
   }
   render();
 }
 
 document.getElementById("latest").onclick = () => {
-  const code = document.getElementById("latest-code");
-  if (!document.getElementById("latest").classList.contains("empty")) copy(code.textContent, code);
+  const latest = data && data.messages.find(m => m.otp);
+  if (latest) copy(latest.otp);
 };
 poll();
 setInterval(() => { if (!document.hidden) poll(); }, 4000);
