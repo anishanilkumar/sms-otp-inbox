@@ -20,8 +20,10 @@ import json
 import os
 import random
 import re
+import socket
 import sqlite3
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -40,6 +42,12 @@ PAGE = (Path(__file__).parent / "index.html").read_bytes()
 # made up from the clock (demo_payload), so every visitor sees the same live-looking
 # page and there is no state to reset.
 DEMO = os.environ.get("SMS_DEMO") == "1"
+# Optional: say "a code arrived" on a NATS server (subject SMS_NOTIFY_SUBJECT), e.g. for a
+# phone app to wake on. Only the sender goes out, never the text or the code. Off unless set.
+NATS_URL = os.environ.get("SMS_NATS_URL", "")
+NATS_USER = os.environ.get("SMS_NATS_USER", "")
+NATS_PASSWORD_FILE = os.environ.get("SMS_NATS_PASSWORD_FILE", "")
+NOTIFY_SUBJECT = os.environ.get("SMS_NOTIFY_SUBJECT", "")
 
 # A code is only taken from a message that says it is one. Without a keyword, a bare
 # number is as likely an amount, a balance or an account suffix, and showing that as
@@ -73,6 +81,42 @@ def db():
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def nats_publish(subject, payload):
+    """NATS's plain-text protocol, standard library only: connect, publish, confirm with PING."""
+    host, port = NATS_URL.split("://", 1)[-1].rsplit(":", 1)
+    connect = {"verbose": False, "pedantic": False, "name": "sms-inbox", "lang": "python", "version": "1"}
+    if NATS_PASSWORD_FILE:
+        with open(NATS_PASSWORD_FILE) as f:
+            connect.update(user=NATS_USER, **{"pass": f.read().strip()})
+    with socket.create_connection((host, int(port)), timeout=5) as s:
+        f = s.makefile("rwb")
+        if not f.readline().startswith(b"INFO "):
+            raise ConnectionError("not a NATS server")
+        f.write(b"CONNECT " + json.dumps(connect).encode() + b"\r\n")
+        f.write(f"PUB {subject} {len(payload)}\r\n".encode() + payload + b"\r\nPING\r\n")
+        f.flush()
+        while True:
+            line = f.readline()
+            if not line or line.startswith(b"-ERR"):
+                raise ConnectionError((line or b"closed").decode().strip())
+            if line.startswith(b"PONG"):
+                return
+
+
+def announce(sender):
+    """A new code from `sender`: tell NATS, if configured, without holding up the phone's request."""
+    if not (NATS_URL and NOTIFY_SUBJECT):
+        return
+    body = json.dumps({"section": "sms", "title": f"Code from {sender}"[:200]}).encode()
+
+    def send():
+        try:
+            nats_publish(NOTIFY_SUBJECT, body)
+        except (OSError, ValueError) as e:
+            print(f"NATS: {e}", file=sys.stderr, flush=True)
+    threading.Thread(target=send, daemon=True).start()
 
 
 def init_db():
@@ -213,17 +257,20 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(202, b'{"error":"unparseable, dropped"}')
         now = int(time.time() * 1000)
         received = as_ms(msg.get("receivedStamp")) or now
+        otp = extract_otp(text)
         with db() as conn:
-            conn.execute(
+            cur = conn.execute(
                 "INSERT OR IGNORE INTO sms (sender, body, otp, sim, sent_ms, received_ms, stored_ms) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (sender, text, extract_otp(text), str(msg.get("sim", "")),
+                (sender, text, otp, str(msg.get("sim", "")),
                  as_ms(msg.get("sentStamp")), received, now),
             )
             conn.execute("DELETE FROM sms WHERE stored_ms < ?", (now - KEEP_DAYS * 86400_000,))
             # A signed SMS proves the phone is up just as well as a heartbeat does.
             remember(conn, sms_ms=now, battery=msg.get("battery"), power=msg.get("power"),
                      network=msg.get("network"), version=msg.get("version"))
+        if otp and cur.rowcount == 1:  # a code, and not a retry of one already stored
+            announce(sender)
         self.send(200, b'{"ok":true}')
 
     def heartbeat(self):

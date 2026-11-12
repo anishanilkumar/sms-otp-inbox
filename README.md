@@ -46,6 +46,8 @@ SMS_DB=./sms.db python3 app.py      # listens on 127.0.0.1:8776
 | `SMS_DB` | `/var/lib/sms-inbox/sms.db` | |
 | `SMS_PORT` | `8776` | |
 | `SMS_KEEP_DAYS` | `7` | |
+| `SMS_NATS_URL`, `SMS_NOTIFY_SUBJECT` | unset | Optional: when both are set, each new code publishes `{"section": "sms", "title": "Code from <sender>"}` to that NATS subject (the sender only, never the text or the code), e.g. to wake a phone app |
+| `SMS_NATS_USER`, `SMS_NATS_PASSWORD_FILE` | unset | The NATS login, if it needs one |
 | `SMS_DEMO` | unset | `1` runs the public demo: no secrets and no database are needed, `/api/messages` returns a made-up inbox generated from the clock, and every POST is refused |
 
 Tests: `python3 -m unittest test_app`. Deploy: copy `.deploy.env.example` to

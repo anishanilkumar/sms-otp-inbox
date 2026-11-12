@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import time
 import os
 import tempfile
 import threading
@@ -67,6 +68,33 @@ class Hook(unittest.TestCase):
         mine = [m for m in msgs if m["otp"] == "551203"]
         self.assertEqual(len(mine), 1)
         self.assertEqual(mine[0]["sender"], "AX-HDFCBK")
+
+    def test_a_new_code_is_announced_once_by_sender_only(self):
+        said = []
+        app.announce, real = said.append, app.announce
+        try:
+            body = '{"from":"JM-SWIGGY","text":"424242 is your login OTP","receivedStamp":1761500009000}'
+            self.assertEqual(self.post(body), 200)
+            self.assertEqual(self.post(body), 200)  # phone retry: stored once, said once
+            self.post('{"from":"JD-AIRTEL","text":"Your PIN was changed","receivedStamp":1761500010000}')  # no code
+            self.assertEqual(said, ["JM-SWIGGY"])
+        finally:
+            app.announce = real
+
+    def test_announce_sends_the_sender_never_the_code(self):
+        sent = []
+        real = (app.nats_publish, app.NATS_URL, app.NOTIFY_SUBJECT)
+        app.nats_publish = lambda subject, payload: sent.append((subject, json.loads(payload)))
+        app.NATS_URL, app.NOTIFY_SUBJECT = "nats://127.0.0.1:4222", "notify.me"
+        try:
+            app.announce("AX-HDFCBK")
+            for _ in range(50):
+                if sent:
+                    break
+                time.sleep(0.02)
+            self.assertEqual(sent, [("notify.me", {"section": "sms", "title": "Code from AX-HDFCBK"})])
+        finally:
+            app.nats_publish, app.NATS_URL, app.NOTIFY_SUBJECT = real
 
     def beat(self, token):
         req = urllib.request.Request(self.base + "/heartbeat/" + token, b"", method="POST")
